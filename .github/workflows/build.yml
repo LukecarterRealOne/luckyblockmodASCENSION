@@ -11,9 +11,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: luckyblockmod-forge
 
     steps:
       - name: Check out source
@@ -30,12 +27,27 @@ jobs:
         with:
           gradle-version: '8.8'
 
+      - name: Locate Gradle project
+        id: project
+        shell: bash
+        run: |
+          if [[ -f "build.gradle" || -f "build.gradle.kts" ]]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          elif [[ -f "luckyblockmod-forge/build.gradle" || -f "luckyblockmod-forge/build.gradle.kts" ]]; then
+            echo "dir=luckyblockmod-forge" >> "$GITHUB_OUTPUT"
+          else
+            echo "Could not find build.gradle or build.gradle.kts at the repository root or in luckyblockmod-forge/."
+            echo "Repository files (first 3 levels):"
+            find . -maxdepth 3 -type f | sort | head -200
+            exit 1
+          fi
+
       - name: Build mod
-        run: gradle --no-daemon clean build
+        run: gradle --no-daemon -p "${{ steps.project.outputs.dir }}" clean build
 
       - name: Upload mod JAR
         uses: actions/upload-artifact@v4
         with:
           name: luckyblockmod-forge-jar
-          path: luckyblockmod-forge/build/libs/*.jar
+          path: ${{ steps.project.outputs.dir }}/build/libs/*.jar
           if-no-files-found: error
