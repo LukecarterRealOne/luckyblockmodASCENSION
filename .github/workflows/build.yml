@@ -12,7 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Set up Java 17
@@ -26,30 +26,63 @@ jobs:
         with:
           gradle-version: '8.8'
 
-      - name: Find Gradle project
+      - name: Find or extract Gradle project
         id: project
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t candidates < <(find . -type d \( -name .git -o -name .gradle -o -name build \) -prune -o -type f \( -name build.gradle -o -name build.gradle.kts \) -print | sort)
+
+          find_build_files() {
+            find . \
+              -type d \( -name .git -o -name .gradle -o -name build \) -prune -o \
+              -type f \( -name build.gradle -o -name build.gradle.kts \) -print | sort
+          }
+
+          mapfile -t candidates < <(find_build_files)
+
+          # If the repository contains only a source ZIP, unpack it automatically.
           if (( ${#candidates[@]} == 0 )); then
-            echo 'ERROR: No build.gradle or build.gradle.kts was found in the checked-out repository.'
-            echo 'Upload/extract the MOD SOURCE files, not just the ZIP file or the workflow.'
-            echo 'Expected at least: build.gradle, settings.gradle, gradle.properties, and src/.'
-            echo 'Visible non-git files:'
-            find . -type d -name .git -prune -o -type f -print | sort | head -100
+            mkdir -p .ci-unpacked
+            found_archive=false
+            while IFS= read -r -d '' archive; do
+              # Only unpack archives that actually contain a Gradle build file.
+              if unzip -Z1 "$archive" | grep -Eq '(^|/)build\.gradle(\.kts)?$'; then
+                found_archive=true
+                dest=".ci-unpacked/$(basename "${archive%.*}")"
+                echo "Extracting source archive: $archive -> $dest"
+                mkdir -p "$dest"
+                unzip -oq "$archive" -d "$dest"
+              fi
+            done < <(find . \
+              -path './.git' -prune -o \
+              -path './.ci-unpacked' -prune -o \
+              -type f -iname '*.zip' -print0 | sort -z)
+
+            if [[ "$found_archive" != true ]]; then
+              echo 'ERROR: No Gradle build file was found, and no ZIP containing build.gradle was available.'
+              echo 'The repository must contain the mod source files or a source ZIP.'
+              echo 'Visible repository files:'
+              find . -path './.git' -prune -o -type f -print | sort | head -150
+              exit 1
+            fi
+
+            mapfile -t candidates < <(find_build_files)
+          fi
+
+          if (( ${#candidates[@]} == 0 )); then
+            echo 'ERROR: The ZIP was extracted, but no build.gradle or build.gradle.kts was found.'
+            find . -path './.git' -prune -o -type f -print | sort | head -150
             exit 1
           fi
-          if (( ${#candidates[@]} > 1 )); then
-            echo 'Found more than one Gradle project; using the first sorted build file:'
-            printf '  %s\n' "${candidates[@]}"
-          fi
+
           build_file="${candidates[0]}"
           project_dir="$(dirname "$build_file")"
           project_dir="${project_dir#./}"
           [[ "$project_dir" == "$build_file" ]] && project_dir='.'
           echo "dir=$project_dir" >> "$GITHUB_OUTPUT"
-          echo "Building project at: $project_dir"
+          echo "Gradle project found at: $project_dir"
+          test -d "$project_dir/src" || { echo 'ERROR: Gradle project has no src/ directory.'; exit 1; }
+          test -f "$project_dir/settings.gradle" || test -f "$project_dir/settings.gradle.kts" || echo 'Notice: settings.gradle was not found; continuing.'
 
       - name: Build mod
         run: gradle --no-daemon -p "${{ steps.project.outputs.dir }}" clean build
