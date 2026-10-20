@@ -1,4 +1,4 @@
-name: Build Forge Mod
+name: Build Lucky Block Mod
 
 on:
   push:
@@ -11,7 +11,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -27,20 +26,30 @@ jobs:
         with:
           gradle-version: '8.8'
 
-      - name: Locate Gradle project
+      - name: Find Gradle project
         id: project
         shell: bash
         run: |
-          if [[ -f "build.gradle" || -f "build.gradle.kts" ]]; then
-            echo "dir=." >> "$GITHUB_OUTPUT"
-          elif [[ -f "luckyblockmod-forge/build.gradle" || -f "luckyblockmod-forge/build.gradle.kts" ]]; then
-            echo "dir=luckyblockmod-forge" >> "$GITHUB_OUTPUT"
-          else
-            echo "Could not find build.gradle or build.gradle.kts at the repository root or in luckyblockmod-forge/."
-            echo "Repository files (first 3 levels):"
-            find . -maxdepth 3 -type f | sort | head -200
+          set -euo pipefail
+          mapfile -t candidates < <(find . -type d \( -name .git -o -name .gradle -o -name build \) -prune -o -type f \( -name build.gradle -o -name build.gradle.kts \) -print | sort)
+          if (( ${#candidates[@]} == 0 )); then
+            echo 'ERROR: No build.gradle or build.gradle.kts was found in the checked-out repository.'
+            echo 'Upload/extract the MOD SOURCE files, not just the ZIP file or the workflow.'
+            echo 'Expected at least: build.gradle, settings.gradle, gradle.properties, and src/.'
+            echo 'Visible non-git files:'
+            find . -type d -name .git -prune -o -type f -print | sort | head -100
             exit 1
           fi
+          if (( ${#candidates[@]} > 1 )); then
+            echo 'Found more than one Gradle project; using the first sorted build file:'
+            printf '  %s\n' "${candidates[@]}"
+          fi
+          build_file="${candidates[0]}"
+          project_dir="$(dirname "$build_file")"
+          project_dir="${project_dir#./}"
+          [[ "$project_dir" == "$build_file" ]] && project_dir='.'
+          echo "dir=$project_dir" >> "$GITHUB_OUTPUT"
+          echo "Building project at: $project_dir"
 
       - name: Build mod
         run: gradle --no-daemon -p "${{ steps.project.outputs.dir }}" clean build
